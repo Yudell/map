@@ -1,0 +1,16 @@
+{
+  "dependencies": {
+    "canvas": "^2.11.2",
+    "ctx": "^0.3.0",
+    "d3": "^7.9.0",
+    "d3-delaunay": "^6.0.4",
+    "d3-voronoi": "^1.1.4",
+    "fractal-noise": "^2.1.0",
+    "kmeans-js": "^0.1.2",
+    "open-simplex-noise": "^2.5.0",
+    "perlin-noise": "^0.0.1",
+    "seedrandom": "^3.0.5",
+    "simplex-noise": "^4.0.1",
+    "voronoi": "^1.0.0"
+  }
+}

@@ -1,0 +1,796 @@
+const { createCanvas } = require('canvas');
+const fs = require('fs');
+const { createNoise, newFractalNoise, defaultOctaves, defaultFrequency, defaultPersistence, generateRandomSeed } = require('./mapgen');
+//const { generatePoliticalMap } = require('./politicalMapGenerator');
+
+// Константы для типов местности
+const terrainType = {
+  OCEAN: 'OCEAN',
+  SEA: 'SEA',
+  WET_SAND: 'WET_SAND',
+  SAND: 'SAND',
+  DRY_SAND: 'DRY_SAND',
+  DRY_GRASS: 'DRY_GRASS',
+  GRASS: 'GRASS',
+  WET_GRASS: 'WET_GRASS',
+  MOUNTAIN_SNOW: 'MOUNTAIN_SNOW',
+  MOUNTAIN_ORE: 'MOUNTAIN_ORE',
+  MOUNTAIN: 'MOUNTAIN',
+  DESERT: 'DESERT',
+  RIVER: 'RIVER',
+};
+
+// Функция для генерации карты
+function generateMap(width, height, terrainNoise, variantNoise, biomeNoise) {
+  const map = [];
+  const heightMap = [];
+  
+  for (let y = 0; y < height; y++) {
+    map[y] = [];
+    heightMap[y] = [];
+    for (let x = 0; x < width; x++) {
+      const terrainValue = terrainNoise(x / 100, y / 100);
+      const variantValue = variantNoise(x / 100, y / 100);
+      const biomeValue = biomeNoise(x / 100, y / 100);
+      let info = {};
+
+      // Определение типа местности и вариантов на основе шумов
+      if (terrainValue < 0) {
+        info.color = '#003eb2';
+        info.type = terrainType.OCEAN;
+      } else if (terrainValue < 0.2) {
+        info.color = '#0952c6';
+        info.type = terrainType.SEA;
+      } else if (terrainValue < 0.22) {
+        info.variantNoise = variantValue;
+        if (variantValue < -0.2) {
+          info.color = '#867645';
+          info.type = terrainType.WET_SAND;
+        } else if (variantValue < 0.2) {
+          info.color = '#a49463';
+          info.type = terrainType.SAND;
+        } else {
+          info.color = '#c2b281';
+          info.type = terrainType.DRY_SAND;
+        }
+      } else if (biomeValue > 0.5) { // Используем biomeValue для определения пустыни
+        info.color = '#f0e68c';
+        info.type = terrainType.DESERT;
+      } else if (terrainValue < 0.5) {
+        info.variantNoise = variantValue;
+        if (variantValue < -0.2) {
+          info.color = '#284d00';
+          info.type = terrainType.DRY_GRASS;
+        } else if (variantValue < 0.2) {
+          info.color = '#3c6114';
+          info.type = terrainType.GRASS;
+        } else {
+          info.color = '#5a7f32';
+          info.type = terrainType.WET_GRASS;
+        }
+      } else {
+        info.variantNoise = variantValue;
+        if (variantValue < -0.2) {
+          info.color = '#ebebeb';
+          info.type = terrainType.MOUNTAIN_SNOW;
+        } else if (variantValue < 0.2) {
+          info.color = '#8c8e7b';
+          info.type = terrainType.MOUNTAIN_ORE;
+        } else {
+          info.color = '#a0a28f';
+          info.type = terrainType.MOUNTAIN;
+        }
+      }
+
+      map[y][x] = info;
+      heightMap[y][x] = terrainValue;
+    }
+  }
+
+  // Проверка и корректировка границ пустыни
+  const allowedNeighbors = [terrainType.SAND, terrainType.GRASS, terrainType.WET_GRASS];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (map[y][x].type === terrainType.DESERT) {
+        for (let dy = -1; dy <= 1; dy++) {
+          for (let dx = -1; dx <= 1; dx++) {
+            const ny = y + dy;
+            const nx = x + dx;
+            if (ny >= 0 && ny < height && nx >= 0 && nx < width && !allowedNeighbors.includes(map[ny][nx].type)) {
+              if (map[ny][nx].type === terrainType.MOUNTAIN_SNOW || map[ny][nx].type === terrainType.MOUNTAIN_ORE || map[ny][nx].type === terrainType.MOUNTAIN) {
+                map[ny][nx].type = terrainType.GRASS;
+                map[ny][nx].color = '#3c6114';
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return map;
+}
+
+// Функция для отрисовки карты
+function drawMap(map, cellSize) {
+  const canvas = createCanvas(map[0].length * cellSize, map.length * cellSize);
+  const ctx = canvas.getContext('2d');
+
+  for (let y = 0; y < map.length; y++) {
+    for (let x = 0; x < map[y].length; x++) {
+      const info = map[y][x];
+      ctx.fillStyle = info.color;
+      ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+    }
+  }
+
+  return canvas;
+}
+
+function generatePoliticalMap(physicalMap, width, height, minCountrySize) {
+  const politicalMap = Array.from({ length: height }, () => Array(width).fill(0));
+  const visited = Array.from({ length: height }, () => Array(width).fill(false));
+  let countryId = 1;
+
+  const directions = [
+    { dx: 0, dy: 1 },
+    { dx: 1, dy: 0 },
+    { dx: 0, dy: -1 },
+    { dx: -1, dy: 0 }
+  ];
+
+  function isValid(x, y) {
+    return x >= 0 && x < width && y >= 0 && y < height;
+  }
+
+  function floodFill(x, y, countryId) {
+    const queue = [{ x, y }];
+    const terrain = physicalMap[y][x].type;
+
+    while (queue.length > 0) {
+      const { x, y } = queue.shift();
+
+      if (!isValid(x, y) || visited[y][x] || physicalMap[y][x].type !== terrain) {
+        continue;
+      }
+
+      visited[y][x] = true;
+      politicalMap[y][x] = countryId;
+
+      for (const { dx, dy } of directions) {
+        queue.push({ x: x + dx, y: y + dy });
+      }
+    }
+  }
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!visited[y][x] && physicalMap[y][x].type !== terrainType.OCEAN && physicalMap[y][x].type !== terrainType.SEA && physicalMap[y][x].type !== terrainType.RIVER) {
+        floodFill(x, y, countryId);
+        countryId++;
+      }
+    }
+  }
+
+  // Проверка размеров стран и их объединение при необходимости
+  let countrySizes = {};
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const countryId = politicalMap[y][x];
+      if (countryId > 0) {
+        if (!countrySizes[countryId]) {
+          countrySizes[countryId] = 0;
+        }
+        countrySizes[countryId]++;
+      }
+    }
+  }
+
+  let countryNeighbors = {};
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const countryId = politicalMap[y][x];
+      if (countryId > 0) {
+        if (!countryNeighbors[countryId]) {
+          countryNeighbors[countryId] = new Set();
+        }
+        for (const { dx, dy } of directions) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (isValid(nx, ny) && politicalMap[ny][nx] !== countryId && politicalMap[ny][nx] !== 0) {
+            countryNeighbors[countryId].add(politicalMap[ny][nx]);
+          }
+        }
+      }
+    }
+  }
+
+  const mergeCountries = (smallCountryId, largeCountryId) => {
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (politicalMap[y][x] === smallCountryId) {
+          politicalMap[y][x] = largeCountryId;
+        }
+      }
+    }
+  };
+
+  let countriesToMerge = [];
+  do {
+    countriesToMerge = [];
+    for (const [countryId, size] of Object.entries(countrySizes)) {
+      if (size < minCountrySize) {
+        countriesToMerge.push(parseInt(countryId));
+      }
+    }
+
+    for (const smallCountryId of countriesToMerge) {
+      if (countryNeighbors[smallCountryId] && countryNeighbors[smallCountryId].size > 0) {
+        const largeCountryId = Array.from(countryNeighbors[smallCountryId])[0];
+        mergeCountries(smallCountryId, largeCountryId);
+      } else {
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            if (politicalMap[y][x] === smallCountryId) {
+              politicalMap[y][x] = 0;
+            }
+          }
+        }
+      }
+    }
+
+    // Пересчет размеров стран после объединения
+    countrySizes = {};
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const countryId = politicalMap[y][x];
+        if (countryId > 0) {
+          if (!countrySizes[countryId]) {
+            countrySizes[countryId] = 0;
+          }
+          countrySizes[countryId]++;
+        }
+      }
+    }
+
+    // Пересчет соседей стран после объединения
+    countryNeighbors = {};
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const countryId = politicalMap[y][x];
+        if (countryId > 0) {
+          if (!countryNeighbors[countryId]) {
+            countryNeighbors[countryId] = new Set();
+          }
+          for (const { dx, dy } of directions) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (isValid(nx, ny) && politicalMap[ny][nx] !== countryId && politicalMap[ny][nx] !== 0) {
+              countryNeighbors[countryId].add(politicalMap[ny][nx]);
+            }
+          }
+        }
+      }
+    }
+  } while (countriesToMerge.length > 0);
+
+  return politicalMap;
+}
+
+function drawSolidBorders(ctx, politicalMap, physicalMap, cellSize) {
+  const width = politicalMap[0].length;
+  const height = politicalMap.length;
+
+  ctx.strokeStyle = '#000000'; // Цвет границ
+  ctx.lineWidth = 2;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const countryId = politicalMap[y][x];
+      if (countryId > 0) {
+        // Проверка правой границы
+        if (x + 1 < width && politicalMap[y][x + 1] !== countryId) {
+          const neighborType = physicalMap[y][x + 1].type;
+          if (neighborType !== terrainType.SEA && neighborType !== terrainType.OCEAN && neighborType !== terrainType.RIVER) {
+            ctx.beginPath();
+            ctx.moveTo((x + 1) * cellSize, y * cellSize);
+            ctx.lineTo((x + 1) * cellSize, (y + 1) * cellSize);
+            ctx.stroke();
+          }
+        }
+        // Проверка нижней границы
+        if (y + 1 < height && politicalMap[y + 1][x] !== countryId) {
+          const neighborType = physicalMap[y + 1][x].type;
+          if (neighborType !== terrainType.SEA && neighborType !== terrainType.OCEAN && neighborType !== terrainType.RIVER) {
+            ctx.beginPath();
+            ctx.moveTo(x * cellSize, (y + 1) * cellSize);
+            ctx.lineTo((x + 1) * cellSize, (y + 1) * cellSize);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+  }
+}
+
+// Функция для отрисовки политической карты поверх физической
+function drawPoliticalMapOverPhysical(physicalMap, politicalMap, cellSize) {
+  const canvas = drawMap(physicalMap, cellSize);
+  const ctx = canvas.getContext('2d');
+
+  const predefinedColors = [
+    '#b8b2e2',
+    '#c9e7d5',
+    '#f5eaa9',
+    '#d6dce3',
+    '#f5cbc9',
+    '#b7e0d8',
+    '#e1ecba',
+    '#c6d9f3',
+    '#e8ceef'
+  ];
+
+  const colors = {};
+  let colorIndex = 0;
+
+  for (let y = 0; y < politicalMap.length; y++) {
+    for (let x = 0; x < politicalMap[y].length; x++) {
+      const countryId = politicalMap[y][x];
+      if (countryId > 0 && !colors[countryId]) {
+        colors[countryId] = predefinedColors[colorIndex % predefinedColors.length];
+        colorIndex++;
+      }
+      if (countryId > 0) {
+        ctx.fillStyle = colors[countryId];
+        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+      }
+    }
+  }
+
+  // Рисуем сплошные границы
+  drawSolidBorders(ctx, politicalMap, physicalMap, cellSize);
+
+  return canvas;
+}
+
+// Сохранение карты в виде PNG-файла
+function saveMapAsPNG(canvas, filename) {
+  const buffer = canvas.toBuffer('image/png');
+  fs.writeFileSync(filename, buffer);
+}
+
+// Конфигурация
+const mapWidth = 200;
+const mapHeight = 200;
+const cellSize = 10;
+
+// Генерация случайного сида
+const terrainSeed = generateRandomSeed();
+const variantSeed = generateRandomSeed();
+const biomeSeed = generateRandomSeed();
+
+// Использование случайного сида для функций шума
+const terrainNoise = createNoise(terrainSeed);
+const variantNoise = createNoise(variantSeed);
+const biomeNoise = createNoise(biomeSeed);
+
+const getTerrainNoise = newFractalNoise({
+  noise: terrainNoise,
+  octaves: defaultOctaves,
+  frequency: defaultFrequency,
+  persistence: defaultPersistence
+});
+
+const getVariantNoise = newFractalNoise({
+  noise: variantNoise,
+  octaves: defaultOctaves,
+  frequency: defaultFrequency,
+  persistence: defaultPersistence
+});
+
+const getBiomeNoise = newFractalNoise({
+  noise: biomeNoise,
+  octaves: defaultOctaves,
+  frequency: defaultFrequency,
+  persistence: defaultPersistence
+});
+
+function generateRivers(map, heightMap, averageRiverLength) {
+  const width = map[0].length;
+  const height = map.length;
+  const riverSources = [];
+  const directions = [
+    { dx: 0, dy: 1 },  // вниз
+    { dx: 0, dy: -1 }, // вверх
+    { dx: -1, dy: 0 }, // влево
+    { dx: 1, dy: 0 },  // вправо
+    { dx: 1, dy: 1 },  // вправо-вниз
+    { dx: -1, dy: -1 },// влево-вверх
+    { dx: -1, dy: 1 }, // влево-вниз
+    { dx: 1, dy: -1 }  // вправо-вверх
+  ];
+
+  // Массив для определения противоположных направлений
+  const oppositeDirections = {
+    '0,1': '0,-1',
+    '0,-1': '0,1',
+    '-1,0': '1,0',
+    '1,0': '-1,0',
+    '1,1': '-1,-1',
+    '-1,-1': '1,1',
+    '-1,1': '1,-1',
+    '1,-1': '-1,1'
+  };
+
+  // Определение истоков рек
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if ((map[y][x].type === terrainType.MOUNTAIN || map[y][x].type === terrainType.MOUNTAIN_ORE || map[y][x].type === terrainType.WET_GRASS || map[y][x].type === terrainType.DRY_GRASS || map[y][x].type === terrainType.GRASS) && Math.random() < 0.000085) {
+        riverSources.push({ x, y });
+      }
+    }
+  }
+
+  // Расчет вероятности завершения реки
+  const riverTerminationProbability = 1 / averageRiverLength;
+
+  // Построение рек
+  riverSources.forEach(source => {
+    let current = source;
+    let riverDirection = directions[Math.floor(Math.random() * directions.length)];
+    const visited = new Set();
+    visited.add(`${current.x},${current.y}`);
+
+    while (current) {
+      map[current.y][current.x].type = terrainType.RIVER;
+      map[current.y][current.x].color = '#0952c6'; // Синий цвет для реки
+
+      // Найти следующую клетку с наименьшей высотой
+      let next = null;
+      let minHeight = heightMap[current.y][current.x];
+      const possibleDirections = [
+        riverDirection,
+        { dx: riverDirection.dx + 1, dy: riverDirection.dy },
+        { dx: riverDirection.dx - 1, dy: riverDirection.dy },
+        { dx: riverDirection.dx, dy: riverDirection.dy + 1 },
+        { dx: riverDirection.dx, dy: riverDirection.dy - 1 }
+      ].filter(dir => dir.dx >= -1 && dir.dx <= 1 && dir.dy >= -1 && dir.dy <= 1 && `${dir.dx},${dir.dy}` !== oppositeDirections[`${riverDirection.dx},${riverDirection.dy}`]);
+
+      // Перемешиваем направления для разнообразия
+      possibleDirections.sort(() => Math.random() - 0.65);
+
+      for (const dir of possibleDirections) {
+        const ny = current.y + dir.dy;
+        const nx = current.x + dir.dx;
+        if (ny >= 0 && ny < height && nx >= 0 && nx < width && !visited.has(`${nx},${ny}`)) {
+          if (heightMap[ny][nx] < minHeight) {
+            minHeight = heightMap[ny][nx];
+            next = { x: nx, y: ny };
+            riverDirection = dir; // Обновляем основное направление реки
+          } else if (heightMap[ny][nx] === minHeight && Math.random() < 0.027) {
+            next = { x: nx, y: ny };
+            riverDirection = dir; // Обновляем основное направление реки
+          }
+          else {
+            next = { x: nx, y: ny};
+          }
+        }
+      }
+
+      // Если следующая клетка — море или океан, завершить реку
+      if (next && (map[next.y][next.x].type === terrainType.OCEAN || map[next.y][next.x].type === terrainType.SEA || map[next.y][next.x].type === terrainType.RIVER)) {
+        map[next.y][next.x].type = terrainType.RIVER;
+        map[next.y][next.x].color = '#0952c6';
+        break;
+      }
+
+      // Проверка вероятности завершения реки
+      if (Math.random() < riverTerminationProbability) {
+        break;
+      }
+
+      if (next) {
+        visited.add(`${next.x},${next.y}`);
+      }
+      current = next;
+    }
+  });
+}
+
+// Генерация карты и рек с указанием средней длины рек
+const physmap = generateMap(mapWidth, mapHeight, getTerrainNoise, getVariantNoise, getBiomeNoise);
+generateRivers(physmap, physmap.map(row => row.map(cell => cell.type === terrainType.MOUNTAIN ? 1 : 0)), 250); // Средняя длина реки
+const physcanvas = drawMap(physmap, cellSize);
+saveMapAsPNG(physcanvas, 'physical_map_with_river.png');
+
+const minCountrySize = 1000; // Пример минимального размера страны
+const politicalMap = generatePoliticalMap(physmap, mapWidth, mapHeight, minCountrySize);
+const politicalCanvas = drawPoliticalMapOverPhysical(physmap, politicalMap, cellSize);
+saveMapAsPNG(politicalCanvas, 'political_map_with_river.png');
+
+function generateRegionNoise(width, height, seed) {
+  const noise = createNoise(seed);
+  const regionNoise = newFractalNoise({
+    noise: noise,
+    octaves: 10, // Уменьшаем количество октав
+    frequency: 0.13, // Уменьшаем частоту
+    persistence: defaultPersistence
+  });
+
+  const noiseMap = [];
+  for (let y = 0; y < height; y++) {
+    noiseMap[y] = [];
+    for (let x = 0; x < width; x++) {
+      noiseMap[y][x] = regionNoise(x / 100, y / 100);
+    }
+  }
+
+  return noiseMap;
+}
+
+function generateRegionsByNoise(politicalMap, physicalMap, minRegionSize) {
+  const width = politicalMap[0].length;
+  const height = politicalMap.length;
+  const regionMap = Array.from({ length: height }, () => Array(width).fill(0));
+  const visited = Array.from({ length: height }, () => Array(width).fill(false));
+  let regionId = 1;
+
+  const directions = [
+    { dx: 0, dy: 1 },
+    { dx: 1, dy: 0 },
+    { dx: 0, dy: -1 },
+    { dx: -1, dy: 0 }
+  ];
+
+  function isValid(x, y) {
+    return x >= 0 && x < width && y >= 0 && y < height;
+  }
+
+  function floodFill(x, y, countryId, regionId, noiseMap) {
+    const queue = [{ x, y }];
+    const noiseValue = noiseMap[y][x];
+
+    while (queue.length > 0) {
+      const { x, y } = queue.shift();
+
+      if (!isValid(x, y) || visited[y][x] || politicalMap[y][x] !== countryId || Math.abs(noiseMap[y][x] - noiseValue) > 0.1) {
+        continue;
+      }
+
+      visited[y][x] = true;
+      regionMap[y][x] = regionId;
+
+      for (const { dx, dy } of directions) {
+        queue.push({ x: x + dx, y: y + dy });
+      }
+    }
+  }
+
+  const countryNoiseMaps = {};
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const countryId = politicalMap[y][x];
+      if (countryId > 0 && !countryNoiseMaps[countryId]) {
+        const seed = generateRandomSeed();
+        countryNoiseMaps[countryId] = generateRegionNoise(width, height, seed);
+      }
+    }
+  }
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!visited[y][x] && politicalMap[y][x] > 0) {
+        const countryId = politicalMap[y][x];
+        const noiseMap = countryNoiseMaps[countryId];
+        floodFill(x, y, countryId, regionId, noiseMap);
+        regionId++;
+      }
+    }
+  }
+
+  // Проверка размеров регионов и их объединение при необходимости
+  let regionSizes = {};
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const regionId = regionMap[y][x];
+      if (regionId > 0) {
+        if (!regionSizes[regionId]) {
+          regionSizes[regionId] = 0;
+        }
+        regionSizes[regionId]++;
+      }
+    }
+  }
+
+  let regionNeighbors = {};
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const regionId = regionMap[y][x];
+      if (regionId > 0) {
+        if (!regionNeighbors[regionId]) {
+          regionNeighbors[regionId] = new Set();
+        }
+        for (const { dx, dy } of directions) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (isValid(nx, ny) && regionMap[ny][nx] !== regionId && regionMap[ny][nx] !== 0) {
+            regionNeighbors[regionId].add(regionMap[ny][nx]);
+          }
+        }
+      }
+    }
+  }
+
+  const mergeRegions = (smallRegionId, largeRegionId) => {
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (regionMap[y][x] === smallRegionId) {
+          regionMap[y][x] = largeRegionId;
+        }
+      }
+    }
+  };
+
+  let regionsToMerge = [];
+  do {
+    regionsToMerge = [];
+    for (const [regionId, size] of Object.entries(regionSizes)) {
+      if (size < minRegionSize) {
+        regionsToMerge.push(parseInt(regionId));
+      }
+    }
+
+    for (const smallRegionId of regionsToMerge) {
+      if (regionNeighbors[smallRegionId] && regionNeighbors[smallRegionId].size > 0) {
+        const largeRegionId = Array.from(regionNeighbors[smallRegionId])[0];
+        mergeRegions(smallRegionId, largeRegionId);
+      } else {
+        for (let y = 0; y < height; y++) {
+          for (let x = 0; x < width; x++) {
+            if (regionMap[y][x] === smallRegionId) {
+              regionMap[y][x] = 0;
+            }
+          }
+        }
+      }
+    }
+
+    // Пересчет размеров регионов после объединения
+    regionSizes = {};
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const regionId = regionMap[y][x];
+        if (regionId > 0) {
+          if (!regionSizes[regionId]) {
+            regionSizes[regionId] = 0;
+          }
+          regionSizes[regionId]++;
+        }
+      }
+    }
+
+    // Пересчет соседей регионов после объединения
+    regionNeighbors = {};
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        const regionId = regionMap[y][x];
+        if (regionId > 0) {
+          if (!regionNeighbors[regionId]) {
+            regionNeighbors[regionId] = new Set();
+          }
+          for (const { dx, dy } of directions) {
+            const nx = x + dx;
+            const ny = y + dy;
+            if (isValid(nx, ny) && regionMap[ny][nx] !== regionId && regionMap[ny][nx] !== 0) {
+              regionNeighbors[regionId].add(regionMap[ny][nx]);
+            }
+          }
+        }
+      }
+    }
+  } while (regionsToMerge.length > 0);
+
+  return regionMap;
+}
+
+function drawRegionBorders(ctx, regionMap, physicalMap, cellSize) {
+  const width = regionMap[0].length;
+  const height = regionMap.length;
+
+  ctx.strokeStyle = '#000000'; // Цвет границ
+  ctx.lineWidth = 1;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const regionId = regionMap[y][x];
+      if (regionId > 0) {
+        // Проверка правой границы
+        if (x + 1 < width && regionMap[y][x + 1] !== regionId) {
+          const neighborType = physicalMap[y][x + 1].type;
+          if (neighborType !== terrainType.SEA && neighborType !== terrainType.OCEAN && neighborType !== terrainType.RIVER) {
+            ctx.beginPath();
+            ctx.moveTo((x + 1) * cellSize, y * cellSize);
+            ctx.lineTo((x + 1) * cellSize, (y + 1) * cellSize);
+            ctx.stroke();
+          }
+        }
+        // Проверка нижней границы
+        if (y + 1 < height && regionMap[y + 1][x] !== regionId) {
+          const neighborType = physicalMap[y + 1][x].type;
+          if (neighborType !== terrainType.SEA && neighborType !== terrainType.OCEAN && neighborType !== terrainType.RIVER) {
+            ctx.beginPath();
+            ctx.moveTo(x * cellSize, (y + 1) * cellSize);
+            ctx.lineTo((x + 1) * cellSize, (y + 1) * cellSize);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+  }
+}
+
+function drawPoliticalMapWithRegionNoise(physicalMap, politicalMap, regionMap, cellSize) {
+  const canvas = drawMap(physicalMap, cellSize);
+  const ctx = canvas.getContext('2d');
+
+  const predefinedColors = [
+    '#b8b2e2',
+    '#c9e7d5',
+    '#f5eaa9',
+    '#d6dce3',
+    '#f5cbc9',
+    '#b7e0d8',
+    '#e1ecba',
+    '#c6d9f3',
+    '#e8ceef'
+  ];
+
+  const colors = {};
+  let colorIndex = 0;
+
+  for (let y = 0; y < politicalMap.length; y++) {
+    for (let x = 0; x < politicalMap[y].length; x++) {
+      const countryId = politicalMap[y][x];
+      if (countryId > 0 && !colors[countryId]) {
+        colors[countryId] = predefinedColors[colorIndex % predefinedColors.length];
+        colorIndex++;
+      }
+      if (countryId > 0) {
+        ctx.fillStyle = colors[countryId];
+        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+      }
+    }
+  }
+
+  const regionColors = {};
+  colorIndex = 0;
+
+  for (let y = 0; y < regionMap.length; y++) {
+    for (let x = 0; x < regionMap[y].length; x++) {
+      const regionId = regionMap[y][x];
+      if (regionId > 0 && !regionColors[regionId]) {
+        regionColors[regionId] = `rgba(255, 255, 255, ${0.1 + 0.1 * (colorIndex % 5)})`; // Полупрозрачные цвета для регионов
+        colorIndex++;
+      }
+      if (regionId > 0) {
+        ctx.fillStyle = regionColors[regionId];
+        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+      }
+    }
+  }
+
+  // Рисуем сплошные границы
+  drawSolidBorders(ctx, politicalMap, physicalMap, cellSize);
+
+  // Рисуем границы регионов
+  drawRegionBorders(ctx, regionMap, physicalMap, cellSize);
+
+  return canvas;
+}
+
+// Генерация регионов с указанием минимального размера региона
+const minRegionSize = 500; // Пример минимального размера региона
+const regionMap = generateRegionsByNoise(politicalMap, physmap, minRegionSize);
+const regionCanvas = drawPoliticalMapWithRegionNoise(physmap, politicalMap, regionMap, cellSize);
+saveMapAsPNG(regionCanvas, 'political_map_with_region_noise.png');

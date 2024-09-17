@@ -1,0 +1,63 @@
+const { createCanvas } = require('canvas');
+const fs = require('fs');
+const { createNoise2D } = require('simplex-noise');
+// Constants
+const TERRAIN_TYPES = {
+  GRASS: 0,
+  WATER: 1,
+  SAND: 2,
+  FOREST: 3,
+};
+
+const TERRAIN_COLORS = {
+  [TERRAIN_TYPES.GRASS]: 'green',
+  [TERRAIN_TYPES.WATER]: 'blue',
+  [TERRAIN_TYPES.SAND]: 'white',
+  [TERRAIN_TYPES.FOREST]: 'darkgreen',
+};
+
+function generateMap(width, height) {
+  const noise2D = createNoise2D();
+  const map = [];
+
+  for (let y = 0; y < height; y++) {
+    map[y] = [];
+    for (let x = 0; x < width; x++) {
+      const noiseValue = noise2D(x / 100, y / 100);
+      const terrainType = Math.floor((noiseValue + 1) * 2);
+      map[y][x] = terrainType;
+    }
+  }
+
+  return map;
+}
+
+function drawMap(map, cellSize) {
+  const canvas = createCanvas(map[0].length * cellSize, map.length * cellSize);
+  const ctx = canvas.getContext('2d');
+
+  for (let y = 0; y < map.length; y++) {
+    for (let x = 0; x < map[y].length; x++) {
+      const terrainType = map[y][x];
+      ctx.fillStyle = TERRAIN_COLORS[terrainType];
+      ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+    }
+  }
+
+  return canvas;
+}
+
+function saveMapAsPNG(canvas, filename) {
+  const buffer = canvas.toBuffer('image/png');
+  fs.writeFileSync(filename, buffer);
+}
+
+// Configuration
+const mapWidth = 100;
+const mapHeight = 100;
+const cellSize = 10;
+
+// Generate and save the map
+const map = generateMap(mapWidth, mapHeight);
+const canvas = drawMap(map, cellSize);
+saveMapAsPNG(canvas, 'map.png');
