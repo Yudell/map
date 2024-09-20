@@ -7,6 +7,7 @@
 
 ### How physical map is generated:
 
+
 ```mermaid
 flowchart TD
    A[Map configuration choice] --> E;
