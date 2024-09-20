@@ -4,9 +4,8 @@
 ## This is official repository of Fantasy pixel map generator project. All new versions will be updated here.
 
 ### For now this `MD` file is just a test version of future releases.
-
+____
 ### How physical map is generated:
-
 
 ```mermaid
 flowchart TD
