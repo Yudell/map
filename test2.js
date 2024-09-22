@@ -515,9 +515,8 @@ function generateRivers(map, heightMap, averageRiverLength) {
         }
       }
 
-      // Если следующая клетка — море, океан, река или гора, завершить реку
-      if (next && (map[next.y][next.x].type === terrainType.OCEAN || map[next.y][next.x].type === terrainType.SEA || map[next.y][next.x].type === terrainType.RIVER ||
-                   map[next.y][next.x].type === terrainType.MOUNTAIN_SNOW)) {
+      // Если следующая клетка — море или океан, завершить реку
+      if (next && (map[next.y][next.x].type === terrainType.OCEAN || map[next.y][next.x].type === terrainType.SEA || map[next.y][next.x].type === terrainType.RIVER)) {
         map[next.y][next.x].type = terrainType.RIVER;
         map[next.y][next.x].color = '#0952c6';
         map[next.y][next.x].width = Math.min(3, Math.floor(riverLength / 120) + 1); // Увеличиваем ширину реки с её длиной
@@ -577,21 +576,62 @@ function generateCountryNames(politicalMap) {
 }
 
 // Функция для вычисления центра страны
-function calculateCountryCenters(politicalMap) {
+function calculateCountryCenters(politicalMap, physicalMap) {
   const countryCenters = {};
   const countrySizes = {};
+  const directions = [
+    { dx: 0, dy: 1 },
+    { dx: 1, dy: 0 },
+    { dx: 0, dy: -1 },
+    { dx: -1, dy: 0 },
+    { dx: 1, dy: 1 },
+    { dx: -1, dy: -1 },
+    { dx: -1, dy: 1 },
+    { dx: 1, dy: -1 }
+  ];
+
+  function findIslands(countryId, width, height) {
+    const visited = Array.from({ length: height }, () => Array(width).fill(false));
+    const islands = [];
+
+    function dfs(startX, startY) {
+      const stack = [{ x: startX, y: startY }];
+      const island = [];
+
+      while (stack.length > 0) {
+        const { x, y } = stack.pop();
+
+        if (x < 0 || x >= width || y < 0 || y >= height || visited[y][x] || politicalMap[y][x] !== countryId) {
+          continue;
+        }
+
+        visited[y][x] = true;
+        island.push({ x, y });
+
+        for (const { dx, dy } of directions) {
+          stack.push({ x: x + dx, y: y + dy });
+        }
+      }
+
+      return island;
+    }
+
+    for (let y = 0; y < height; y++) {
+      for (let x = 0; x < width; x++) {
+        if (politicalMap[y][x] === countryId && !visited[y][x]) {
+          const island = dfs(x, y);
+          islands.push(island);
+        }
+      }
+    }
+
+    return islands;
+  }
 
   for (let y = 0; y < politicalMap.length; y++) {
     for (let x = 0; x < politicalMap[y].length; x++) {
       const countryId = politicalMap[y][x];
       if (countryId > 0) {
-        if (!countryCenters[countryId]) {
-          countryCenters[countryId] = { sumX: 0, sumY: 0, count: 0 };
-        }
-        countryCenters[countryId].sumX += x;
-        countryCenters[countryId].sumY += y;
-        countryCenters[countryId].count++;
-
         if (!countrySizes[countryId]) {
           countrySizes[countryId] = 0;
         }
@@ -600,13 +640,35 @@ function calculateCountryCenters(politicalMap) {
     }
   }
 
-  for (const countryId in countryCenters) {
-    const center = countryCenters[countryId];
-    countryCenters[countryId] = {
-      x: Math.round(center.sumX / center.count),
-      y: Math.round(center.sumY / center.count),
-      size: countrySizes[countryId]
-    };
+  for (const countryId in countrySizes) {
+    const islands = findIslands(parseInt(countryId), politicalMap[0].length, politicalMap.length);
+    let largestIsland = null;
+    let largestIslandSize = 0;
+
+    for (const island of islands) {
+      if (island.length > largestIslandSize) {
+        largestIsland = island;
+        largestIslandSize = island.length;
+      }
+    }
+
+    if (largestIsland) {
+      let sumX = 0;
+      let sumY = 0;
+      let count = 0;
+
+      for (const { x, y } of largestIsland) {
+        sumX += x;
+        sumY += y;
+        count++;
+      }
+
+      countryCenters[countryId] = {
+        x: Math.round(sumX / count),
+        y: Math.round(sumY / count),
+        size: countrySizes[countryId]
+      };
+    }
   }
 
   return countryCenters;
@@ -632,10 +694,10 @@ function drawCountryNames(ctx, politicalMap, countryNames, countryCenters, cellS
   ];
 
   const possibleRotations = [0]; // Дефолтное положение по горизонтали
-  for (let i = Math.PI / 16; i <= Math.PI / 4; i += Math.PI / 16) {
+  for (let i = Math.PI / 16; i <= Math.PI / 4; i += Math.PI / 64) {
     possibleRotations.push(i); // По часовой стрелке
   }
-  for (let i = -Math.PI / 16; i >= -Math.PI / 4; i -= Math.PI / 16) {
+  for (let i = -Math.PI / 16; i >= -Math.PI / 4; i -= Math.PI / 64) {
     possibleRotations.push(i); // Против часовой стрелки
   }
 
@@ -725,7 +787,7 @@ for (let y = 0; y < politicalMap.length; y++) {
 const countryNames = generateCountryNames(politicalMap);
 
 // Вычисление центров стран
-const countryCenters = calculateCountryCenters(politicalMap);
+const countryCenters = calculateCountryCenters(politicalMap, physmap);
 
 // Отрисовка политической карты с названиями стран
 const politicalCanvas = drawPoliticalMapOverPhysical(physmap, politicalMap, cellSize);
