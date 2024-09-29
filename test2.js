@@ -964,7 +964,6 @@ drawCountryNames(ctxWithColorCheck, politicalMap, countryNames, countryCenters, 
 // Сохранение карты с проверкой цветов стран и названиями стран
 saveMapAsPNG(politicalCanvasWithColorCheck, 'political_map_with_color_check_and_names.png');
 
-// Функция для генерации карты регионов с настройками шума
 function generateRegionMap(politicalMap, physicalMap, width, height, minRegionSize, noiseSettings) {
   const regionMap = Array.from({ length: height }, () => Array(width).fill(0));
   const visited = Array.from({ length: height }, () => Array(width).fill(false));
@@ -999,13 +998,14 @@ function generateRegionMap(politicalMap, physicalMap, width, height, minRegionSi
       for (const { dx, dy } of directions) {
         const nx = x + dx;
         const ny = y + dy;
-        if (isValid(nx, ny) && !visited[ny][nx] && Math.abs(regionNoise(nx / 100, ny / 100) - regionValue) < regionThreshold) {
+        if (isValid(nx, ny) && !visited[ny][nx] && politicalMap[ny][nx] === countryId && Math.abs(regionNoise(nx / 100, ny / 100) - regionValue) < regionThreshold) {
           queue.push({ x: nx, y: ny });
         }
       }
     }
   }
 
+  // Первый проход: заполнение регионов внутри стран
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {
       const countryId = politicalMap[y][x];
@@ -1013,12 +1013,39 @@ function generateRegionMap(politicalMap, physicalMap, width, height, minRegionSi
         const regionSeed = generateRandomSeed();
         const regionNoise = newFractalNoise({
           noise: createNoise(regionSeed),
-          octaves: defaultOctaves,
-          frequency: defaultFrequency,
-          persistence: defaultPersistence
+          octaves: noiseSettings.octaves,
+          frequency: noiseSettings.frequency,
+          persistence: noiseSettings.persistence
         });
         floodFill(x, y, countryId, regionNoise);
         regionId++;
+      }
+    }
+  }
+
+  // Второй проход: проверка и исправление ошибок
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const countryId = politicalMap[y][x];
+      const regionId = regionMap[y][x];
+      if (countryId > 0 && regionId > 0) {
+        for (const { dx, dy } of directions) {
+          const nx = x + dx;
+          const ny = y + dy;
+          if (isValid(nx, ny) && politicalMap[ny][nx] !== countryId && regionMap[ny][nx] === regionId) {
+            // Найдена ошибка: регион выходит за границы страны
+            // Исправляем, перекрашивая регион в соседний регион той же страны
+            const neighborRegionId = regionMap[ny][nx];
+            for (let yy = 0; yy < height; yy++) {
+              for (let xx = 0; xx < width; xx++) {
+                if (regionMap[yy][xx] === regionId) {
+                  regionMap[yy][xx] = neighborRegionId;
+                }
+              }
+            }
+            break;
+          }
+        }
       }
     }
   }
@@ -1125,35 +1152,56 @@ function generateRegionMap(politicalMap, physicalMap, width, height, minRegionSi
     }
   } while (regionsToMerge.length > 0);
 
+  // Проверка на наличие незанятых клеток и присоединение их к ближайшим регионам
+  const checkRadius = 100;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (regionMap[y][x] === 0 && politicalMap[y][x] > 0) {
+        let nearestRegionId = null;
+        let nearestDistance = Infinity;
+
+        for (let dy = -checkRadius; dy <= checkRadius; dy++) {
+          for (let dx = -checkRadius; dx <= checkRadius; dx++) {
+            const ny = y + dy;
+            const nx = x + dx;
+            if (isValid(nx, ny) && regionMap[ny][nx] > 0 && politicalMap[ny][nx] === politicalMap[y][x]) {
+              const distance = Math.sqrt((nx - x) ** 2 + (ny - y) ** 2);
+              if (distance < nearestDistance) {
+                nearestDistance = distance;
+                nearestRegionId = regionMap[ny][nx];
+              }
+            }
+          }
+        }
+
+        if (nearestRegionId !== null) {
+          regionMap[y][x] = nearestRegionId;
+        }
+      }
+    }
+  }
+
   return regionMap;
 }
 
-// Функция для отрисовки карты регионов
-function drawRegionMap(physicalMap, politicalMap, regionMap, cellSize) {
+// Функция для отрисовки карты регионов поверх политической карты
+function drawRegionMapOverPoliticalMap(physicalMap, politicalMap, regionMap, countryNames, countryCenters, cellSize) {
   const canvas = drawMap(physicalMap, cellSize);
   const ctx = canvas.getContext('2d');
 
-  const colors = {};
-  let colorIndex = 0;
-
-  for (let y = 0; y < regionMap.length; y++) {
-    for (let x = 0; x < regionMap[y].length; x++) {
-      const regionId = regionMap[y][x];
-      if (regionId > 0 && !colors[regionId]) {
-        colors[regionId] = predefinedColors[colorIndex % predefinedColors.length];
-        colorIndex++;
-      }
-      if (regionId > 0) {
-        ctx.fillStyle = colors[regionId];
+  // Отрисовка политической карты
+  const politicalColors = checkAndAdjustCountryColors(politicalMap, physicalMap, cellSize);
+  for (let y = 0; y < politicalMap.length; y++) {
+    for (let x = 0; x < politicalMap[y].length; x++) {
+      const countryId = politicalMap[y][x];
+      if (countryId > 0) {
+        ctx.fillStyle = politicalColors[countryId];
         ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
       }
     }
   }
 
-  // Рисуем сплошные границы
-  drawSolidBorders(ctx, politicalMap, physicalMap, cellSize);
-
-  // Отрисовка рек на карте регионов
+  // Отрисовка рек на политической карте
   for (let y = 0; y < physicalMap.length; y++) {
     for (let x = 0; x < physicalMap[y].length; x++) {
       const info = physicalMap[y][x];
@@ -1174,18 +1222,43 @@ function drawRegionMap(physicalMap, politicalMap, regionMap, cellSize) {
     }
   }
 
+  // Отрисовка регионов поверх политической карты
+  const regionColors = {};
+  let colorIndex = 0;
+
+  for (let y = 0; y < regionMap.length; y++) {
+    for (let x = 0; x < regionMap[y].length; x++) {
+      const regionId = regionMap[y][x];
+      if (regionId > 0 && !regionColors[regionId]) {
+        regionColors[regionId] = predefinedColors[colorIndex % predefinedColors.length];
+        colorIndex++;
+      }
+      if (regionId > 0) {
+        ctx.fillStyle = regionColors[regionId];
+        ctx.globalAlpha = 0.8; // Устанавливаем полупрозрачность для регионов
+        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+        ctx.globalAlpha = 1; // Возвращаем прозрачность к 1
+      }
+    }
+  }
+
+
+  drawSolidBorders(ctx, politicalMap, physicalMap, cellSize);
+  // Отрисовка названий стран на политической карте
+  drawCountryNames(ctx, politicalMap, countryNames, countryCenters, cellSize);
+
   return canvas;
 }
 
 // Генерация карты регионов
-const minRegionSize = 200; // Минимальный размер региона
+const minRegionSize = 400; // Минимальный размер региона
 const noiseSettings = {
-  octaves: defaultOctaves, // Используем дефолтное количество октав
-  frequency: defaultFrequency, // Используем дефолтную частоту шума
-  persistence: defaultPersistence // Используем дефолтную персистентность
+  octaves: 100, // Количество октав
+  frequency: 1, // Частота шума
+  persistence: 0.7 // Персистентность
 };
 const regionMap = generateRegionMap(politicalMap, physmap, mapWidth, mapHeight, minRegionSize, noiseSettings);
 
-// Отрисовка карты регионов
-const regionCanvas = drawRegionMap(physmap, politicalMap, regionMap, cellSize);
-saveMapAsPNG(regionCanvas, 'region_map.png');
+// Отрисовка карты регионов поверх политической карты с названиями стран
+const regionCanvasOverPoliticalMap = drawRegionMapOverPoliticalMap(physmap, politicalMap, regionMap, countryNames, countryCenters, cellSize);
+saveMapAsPNG(regionCanvasOverPoliticalMap, 'political_map_with_regions_over_political_map_and_names.png');
