@@ -1,5 +1,5 @@
-const { createCanvas, registerFont } = require('canvas');
-const fs = require('fs');
+//const { createCanvas, registerFont } = require('canvas');
+//const fs = require('fs');
 const { createNoise, newFractalNoise, defaultOctaves, defaultFrequency, defaultPersistence, generateRandomSeed } = require('./mapgen');
 const predefinedColors = require('./colors');
 
@@ -1318,3 +1318,43 @@ const regionMap = generateRegionMapWithCountryBoundaries(politicalMap, physmap, 
 // Отрисовка карты регионов поверх политической карты с похожими цветами и названиями стран
 const regionCanvasOverPoliticalMapWithSimilarColorsAndBorders = drawRegionMapOverPoliticalMapWithSimilarColorsAndBorders(physmap, politicalMap, regionMap, countryNames, countryCenters, cellSize);
 saveMapAsPNG(regionCanvasOverPoliticalMapWithSimilarColorsAndBorders, 'political_map_with_regions_over_political_map_and_similar_colors_and_borders_and_names.png');
+
+// Функция для генерации новой карты
+function generateNewMap() {
+  // Генерация физической карты и рек
+  const physmap = generateMap(mapWidth, mapHeight, getTerrainNoise, getVariantNoise, getBiomeNoise);
+  generateRivers(physmap, physmap.map(row => row.map(cell => cell.type === terrainType.MOUNTAIN ? 1 : 0)), 250); // Средняя длина реки
+
+  // Генерация политической карты
+  const politicalMap = generatePoliticalMap(physmap, mapWidth, mapHeight, minCountrySize);
+
+  // Генерация названий стран
+  const countryNames = generateCountryNames(politicalMap);
+
+  // Вычисление центров стран
+  const countryCenters = calculateCountryCenters(politicalMap, physmap);
+
+  // Генерация карты регионов с учетом границ страны
+  const regionMap = generateRegionMapWithCountryBoundaries(politicalMap, physmap, mapWidth, mapHeight, minRegionSize, noiseSettings);
+
+  // Отрисовка карты регионов поверх политической карты с похожими цветами и названиями стран
+  const regionCanvasOverPoliticalMapWithSimilarColorsAndBorders = drawRegionMapOverPoliticalMapWithSimilarColorsAndBorders(physmap, politicalMap, regionMap, countryNames, countryCenters, cellSize);
+
+  // Получаем canvas элемент из DOM
+  const canvas = document.getElementById('map-canvas');
+  canvas.width = mapWidth * cellSize;
+  canvas.height = mapHeight * cellSize;
+  const ctx = canvas.getContext('2d');
+
+  // Очищаем canvas
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Отрисовываем новую карту
+  ctx.drawImage(regionCanvasOverPoliticalMapWithSimilarColorsAndBorders, 0, 0);
+}
+
+// Обработчик события для кнопки "Generate New Map"
+document.getElementById('generate-map').addEventListener('click', generateNewMap);
+
+// Генерация начальной карты при загрузке страницы
+generateNewMap();
