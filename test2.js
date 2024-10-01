@@ -343,8 +343,8 @@ function saveMapAsPNG(canvas, filename) {
 }
 
 // Конфигурация
-const mapWidth = 500;
-const mapHeight = 500;
+const mapWidth = 2000;
+const mapHeight = 2000;
 const cellSize = 10;
 
 // Генерация случайного сида
@@ -964,7 +964,156 @@ drawCountryNames(ctxWithColorCheck, politicalMap, countryNames, countryCenters, 
 // Сохранение карты с проверкой цветов стран и названиями стран
 saveMapAsPNG(politicalCanvasWithColorCheck, 'political_map_with_color_check_and_names.png');
 
-function generateRegionMap(politicalMap, physicalMap, width, height, minRegionSize, noiseSettings) {
+// Функция для генерации цвета, близкого к заданному цвету
+function generateSimilarColor(baseColor, variation) {
+  const [r, g, b] = baseColor.match(/\w\w/g).map(c => parseInt(c, 16));
+  const newR = Math.min(255, Math.max(0, r + Math.floor(Math.random() * variation * 3 - variation)));
+  const newG = Math.min(255, Math.max(0, g + Math.floor(Math.random() * variation * 3 - variation)));
+  const newB = Math.min(255, Math.max(0, b + Math.floor(Math.random() * variation * 3 - variation)));
+  return `#${newR.toString(16).padStart(2, '0')}${newG.toString(16).padStart(2, '0')}${newB.toString(16).padStart(2, '0')}`;
+}
+
+function drawRegionBorders(ctx, regionMap, physicalMap, cellSize) {
+  const width = regionMap[0].length;
+  const height = regionMap.length;
+
+  ctx.strokeStyle = '#000000'; // Цвет границ
+  ctx.lineWidth = 1;
+
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const regionId = regionMap[y][x];
+      if (regionId > 0) {
+        // Проверка правой границы
+        if (x + 1 < width && regionMap[y][x + 1] !== regionId) {
+          const neighborType = physicalMap[y][x + 1].type;
+          if (neighborType !== terrainType.SEA && neighborType !== terrainType.OCEAN && neighborType !== terrainType.RIVER) {
+            ctx.beginPath();
+            ctx.moveTo((x + 1) * cellSize, y * cellSize);
+            ctx.lineTo((x + 1) * cellSize, (y + 1) * cellSize);
+            ctx.stroke();
+          }
+        }
+        // Проверка нижней границы
+        if (y + 1 < height && regionMap[y + 1][x] !== regionId) {
+          const neighborType = physicalMap[y + 1][x].type;
+          if (neighborType !== terrainType.SEA && neighborType !== terrainType.OCEAN && neighborType !== terrainType.RIVER) {
+            ctx.beginPath();
+            ctx.moveTo(x * cellSize, (y + 1) * cellSize);
+            ctx.lineTo((x + 1) * cellSize, (y + 1) * cellSize);
+            ctx.stroke();
+          }
+        }
+      }
+    }
+  }
+}
+
+// Отрисовка карты регионов поверх политической карты с похожими цветами, границами регионов и названиями стран
+function drawRegionMapOverPoliticalMapWithSimilarColorsAndBorders(physicalMap, politicalMap, regionMap, countryNames, countryCenters, cellSize) {
+  const canvas = drawMap(physicalMap, cellSize);
+  const ctx = canvas.getContext('2d');
+
+  // Отрисовка политической карты
+  const politicalColors = checkAndAdjustCountryColors(politicalMap, physicalMap, cellSize);
+  for (let y = 0; y < politicalMap.length; y++) {
+    for (let x = 0; x < politicalMap[y].length; x++) {
+      const countryId = politicalMap[y][x];
+      if (countryId > 0) {
+        ctx.fillStyle = politicalColors[countryId];
+        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+      }
+    }
+  }
+
+  // Отрисовка рек на политической карте
+  for (let y = 0; y < physicalMap.length; y++) {
+    for (let x = 0; x < physicalMap[y].length; x++) {
+      const info = physicalMap[y][x];
+      if (info.type === terrainType.RIVER) {
+        ctx.fillStyle = info.color;
+        const width = info.width;
+        if (width === 1) {
+          ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+        } else if (width === 2) {
+          ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+          ctx.fillRect((x - 1) * cellSize, y * cellSize, cellSize, cellSize);
+        } else if (width === 3) {
+          ctx.fillRect((x - 1) * cellSize, y * cellSize, cellSize, cellSize);
+          ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+          ctx.fillRect((x + 1) * cellSize, y * cellSize, cellSize, cellSize);
+        }
+      }
+    }
+  }
+
+  // Отрисовка регионов поверх политической карты с похожими цветами
+  const regionColors = {};
+  const regionCountryColors = {};
+
+  // Переопределение цвета региона на основе страны, в которой он находится
+  for (let y = 0; y < regionMap.length; y++) {
+    for (let x = 0; x < regionMap[y].length; x++) {
+      const regionId = regionMap[y][x];
+      const countryId = politicalMap[y][x];
+      if (regionId > 0 && !regionColors[regionId]) {
+        if (!regionCountryColors[countryId]) {
+          regionCountryColors[countryId] = politicalColors[countryId];
+        }
+        regionColors[regionId] = generateSimilarColor(regionCountryColors[countryId], 30); // Генерация цвета, близкого к цвету страны
+      }
+    }
+  }
+
+  // Проверка каждого региона на принадлежность к стране
+  const regionCountries = {};
+  for (let y = 0; y < regionMap.length; y++) {
+    for (let x = 0; x < regionMap[y].length; x++) {
+      const regionId = regionMap[y][x];
+      const countryId = politicalMap[y][x];
+      if (regionId > 0) {
+        if (!regionCountries[regionId]) {
+          regionCountries[regionId] = new Set();
+        }
+        regionCountries[regionId].add(countryId);
+      }
+    }
+  }
+
+  // Если регион принадлежит более чем одной стране, перекрашиваем его в цвет страны, в которой он находится
+  for (const regionId in regionCountries) {
+    if (regionCountries[regionId].size > 1) {
+      const countryId = Array.from(regionCountries[regionId])[0]; // Берем первую страну из множества
+      regionColors[regionId] = generateSimilarColor(politicalColors[countryId], 10);
+    }
+  }
+
+  for (let y = 0; y < regionMap.length; y++) {
+    for (let x = 0; x < regionMap[y].length; x++) {
+      const regionId = regionMap[y][x];
+      if (regionId > 0) {
+        ctx.fillStyle = regionColors[regionId];
+        ctx.globalAlpha = 0.8; // Устанавливаем полупрозрачность для регионов
+        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
+        ctx.globalAlpha = 1; // Возвращаем прозрачность к 1
+      }
+    }
+  }
+
+  // Отрисовка границ регионов
+  drawRegionBorders(ctx, regionMap, physicalMap, cellSize);
+
+  // Отрисовка границ стран
+  drawSolidBorders(ctx, politicalMap, physicalMap, cellSize);
+
+  // Отрисовка названий стран на политической карте
+  drawCountryNames(ctx, politicalMap, countryNames, countryCenters, cellSize);
+
+  return canvas;
+}
+
+// Генерация карты регионов с учетом границ страны
+function generateRegionMapWithCountryBoundaries(politicalMap, physicalMap, width, height, minRegionSize, noiseSettings) {
   const regionMap = Array.from({ length: height }, () => Array(width).fill(0));
   const visited = Array.from({ length: height }, () => Array(width).fill(false));
   let regionId = 1;
@@ -1019,33 +1168,6 @@ function generateRegionMap(politicalMap, physicalMap, width, height, minRegionSi
         });
         floodFill(x, y, countryId, regionNoise);
         regionId++;
-      }
-    }
-  }
-
-  // Второй проход: проверка и исправление ошибок
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const countryId = politicalMap[y][x];
-      const regionId = regionMap[y][x];
-      if (countryId > 0 && regionId > 0) {
-        for (const { dx, dy } of directions) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (isValid(nx, ny) && politicalMap[ny][nx] !== countryId && regionMap[ny][nx] === regionId) {
-            // Найдена ошибка: регион выходит за границы страны
-            // Исправляем, перекрашивая регион в соседний регион той же страны
-            const neighborRegionId = regionMap[ny][nx];
-            for (let yy = 0; yy < height; yy++) {
-              for (let xx = 0; xx < width; xx++) {
-                if (regionMap[yy][xx] === regionId) {
-                  regionMap[yy][xx] = neighborRegionId;
-                }
-              }
-            }
-            break;
-          }
-        }
       }
     }
   }
@@ -1184,81 +1306,15 @@ function generateRegionMap(politicalMap, physicalMap, width, height, minRegionSi
   return regionMap;
 }
 
-// Функция для отрисовки карты регионов поверх политической карты
-function drawRegionMapOverPoliticalMap(physicalMap, politicalMap, regionMap, countryNames, countryCenters, cellSize) {
-  const canvas = drawMap(physicalMap, cellSize);
-  const ctx = canvas.getContext('2d');
-
-  // Отрисовка политической карты
-  const politicalColors = checkAndAdjustCountryColors(politicalMap, physicalMap, cellSize);
-  for (let y = 0; y < politicalMap.length; y++) {
-    for (let x = 0; x < politicalMap[y].length; x++) {
-      const countryId = politicalMap[y][x];
-      if (countryId > 0) {
-        ctx.fillStyle = politicalColors[countryId];
-        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
-      }
-    }
-  }
-
-  // Отрисовка рек на политической карте
-  for (let y = 0; y < physicalMap.length; y++) {
-    for (let x = 0; x < physicalMap[y].length; x++) {
-      const info = physicalMap[y][x];
-      if (info.type === terrainType.RIVER) {
-        ctx.fillStyle = info.color;
-        const width = info.width;
-        if (width === 1) {
-          ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
-        } else if (width === 2) {
-          ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
-          ctx.fillRect((x - 1) * cellSize, y * cellSize, cellSize, cellSize);
-        } else if (width === 3) {
-          ctx.fillRect((x - 1) * cellSize, y * cellSize, cellSize, cellSize);
-          ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
-          ctx.fillRect((x + 1) * cellSize, y * cellSize, cellSize, cellSize);
-        }
-      }
-    }
-  }
-
-  // Отрисовка регионов поверх политической карты
-  const regionColors = {};
-  let colorIndex = 0;
-
-  for (let y = 0; y < regionMap.length; y++) {
-    for (let x = 0; x < regionMap[y].length; x++) {
-      const regionId = regionMap[y][x];
-      if (regionId > 0 && !regionColors[regionId]) {
-        regionColors[regionId] = predefinedColors[colorIndex % predefinedColors.length];
-        colorIndex++;
-      }
-      if (regionId > 0) {
-        ctx.fillStyle = regionColors[regionId];
-        ctx.globalAlpha = 0.8; // Устанавливаем полупрозрачность для регионов
-        ctx.fillRect(x * cellSize, y * cellSize, cellSize, cellSize);
-        ctx.globalAlpha = 1; // Возвращаем прозрачность к 1
-      }
-    }
-  }
-
-
-  drawSolidBorders(ctx, politicalMap, physicalMap, cellSize);
-  // Отрисовка названий стран на политической карте
-  drawCountryNames(ctx, politicalMap, countryNames, countryCenters, cellSize);
-
-  return canvas;
-}
-
-// Генерация карты регионов
-const minRegionSize = 400; // Минимальный размер региона
+// Генерация карты регионов с учетом границ страны
+const minRegionSize = 600; // Минимальный размер региона
 const noiseSettings = {
   octaves: 100, // Количество октав
   frequency: 1, // Частота шума
   persistence: 0.7 // Персистентность
 };
-const regionMap = generateRegionMap(politicalMap, physmap, mapWidth, mapHeight, minRegionSize, noiseSettings);
+const regionMap = generateRegionMapWithCountryBoundaries(politicalMap, physmap, mapWidth, mapHeight, minRegionSize, noiseSettings);
 
-// Отрисовка карты регионов поверх политической карты с названиями стран
-const regionCanvasOverPoliticalMap = drawRegionMapOverPoliticalMap(physmap, politicalMap, regionMap, countryNames, countryCenters, cellSize);
-saveMapAsPNG(regionCanvasOverPoliticalMap, 'political_map_with_regions_over_political_map_and_names.png');
+// Отрисовка карты регионов поверх политической карты с похожими цветами и названиями стран
+const regionCanvasOverPoliticalMapWithSimilarColorsAndBorders = drawRegionMapOverPoliticalMapWithSimilarColorsAndBorders(physmap, politicalMap, regionMap, countryNames, countryCenters, cellSize);
+saveMapAsPNG(regionCanvasOverPoliticalMapWithSimilarColorsAndBorders, 'political_map_with_regions_over_political_map_and_similar_colors_and_borders_and_names.png');
